@@ -1,0 +1,4 @@
+python 3
+matplotlib
+numpy
+requests
