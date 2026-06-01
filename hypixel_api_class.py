@@ -1,79 +1,198 @@
+"""Hypixel Bazaar API client with retry, validation, and DB-backed storage."""
 import json
+import logging
+import time
+import warnings
+
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+from bazzar_db import BazaarDB
 from file_handeler import file_handeler
 
+logger = logging.getLogger(__name__)
 
-class hypixel_api(file_handeler):
-    def __init__(self):
-        self.name_link_bazzar = f"https://api.hypixel.net/skyblock/bazaar"
+BAZAAR_URL = "https://api.hypixel.net/skyblock/bazaar"
 
-    # return in json format
-    def get_information(self, link):
-        r = requests.get(link)
-        return r.json()
+REQUIRED_PRODUCT_FIELDS = (
+    "sellPrice", "buyPrice", "sellVolume", "buyVolume",
+    "sellOrders", "buyOrders",
+)
 
-    def create_dict_name(self, information):
+_SESSION = None
+
+
+def _get_session():
+    global _SESSION
+    if _SESSION is None:
+        _SESSION = requests.Session()
+        retry = Retry(
+            total=3,
+            backoff_factor=1.5,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["GET"],
+        )
+        adapter = HTTPAdapter(max_retries=retry, pool_maxsize=2)
+        _SESSION.mount("https://", adapter)
+        _SESSION.mount("http://", adapter)
+    return _SESSION
+
+
+class hypixel_api:
+    """Fetch and store Hypixel SkyBlock Bazaar data.
+
+    By default, stores snapshots into a local SQLite database (``bazzar.db``).
+    Pass ``db_path=None`` to use the legacy JSON-file backend instead.
+    """
+
+    def __init__(self, db_path="bazzar.db"):
+        self.db: BazaarDB | None = BazaarDB(db_path) if db_path else None
+
+    # ── API fetching ──────────────────────────────────────────────────
+
+    @staticmethod
+    def fetch(url=BAZAAR_URL, timeout=15):
+        """GET *url* with retry and timeout; return parsed JSON.
+
+        Raises ``requests.RequestException`` on connectivity failure.
+        Raises ``ValueError`` if the response payload is structurally invalid.
+        """
+        session = _get_session()
+        resp = session.get(url, timeout=timeout)
+        resp.raise_for_status()
+
+        data = resp.json()
+        if not isinstance(data, dict):
+            raise ValueError("API response is not a JSON object")
+        if not data.get("success"):
+            logger.warning("API returned success=False")
+        if "products" not in data:
+            raise ValueError("API response missing 'products' key")
+        if "lastUpdated" not in data:
+            raise ValueError("API response missing 'lastUpdated' key")
+
+        # Quick validation: at least one product has the expected shape
+        products = data["products"]
+        if not isinstance(products, dict) or len(products) == 0:
+            logger.warning("API returned empty products dict")
+
+        return data
+
+    get_information = fetch  # legacy alias
+
+    # ── DB storage ────────────────────────────────────────────────────
+
+    def save_snapshot(self, api_data):
+        """Persist one API response into the database."""
+        if self.db is None:
+            raise RuntimeError("No database configured (db_path=None)")
+
+        ts = api_data["lastUpdated"]
+        batch = {}
+        for product in api_data["products"].values():
+            qs = product.get("quick_status", {})
+            pid = qs.get("productId")
+            if not pid:
+                continue
+            batch[pid] = {
+                field: float(f"{qs.get(field, 0):.2f}")
+                for field in REQUIRED_PRODUCT_FIELDS
+            }
+        self.db.insert_snapshot(ts, batch)
+        return len(batch)
+
+    # ── Legacy JSON-file methods (kept for backward compat) ───────────
+
+    def update_price(self, info, file):
+        """Legacy: append one snapshot to a JSON file."""
+        warnings.warn("update_price() is deprecated; use save_snapshot() + DB",
+                      DeprecationWarning, stacklevel=2)
+        if self.db:
+            self.save_snapshot(info)
+            return
+        f = file_handeler.load_json_file(file)
+        f['time'].append(info['lastUpdated'])
+        for i in info['products'].values():
+            qs = i['quick_status']
+            pid = qs['productId']
+            f[pid]['sell_price'].append(float(f"{qs.get('sellPrice', 0):.2f}"))
+            f[pid]['buy_price'].append(float(f"{qs.get('buyPrice', 0):.2f}"))
+            f[pid]['sell_order'].append(float(f"{qs.get('sellOrders', 0):.2f}"))
+            f[pid]['buy_order'].append(float(f"{qs.get('buyOrders', 0):.2f}"))
+            f[pid]['buy_volume'].append(float(f"{qs.get('buyVolume', 0):.2f}"))
+            f[pid]['sell_volume'].append(float(f"{qs.get('sellVolume', 0):.2f}"))
+        with open(file, 'w') as c:
+            json.dump(f, c)
+
+    @staticmethod
+    def create_dict_name(information):
+        warnings.warn("create_dict_name() is a legacy JSON helper",
+                      DeprecationWarning, stacklevel=2)
         dictinfo = {'time': []}
         for i in information['products'].values():
-            dictinfo[i['quick_status']['productId']] = {'start_time':[9999, False], 'sell_price': [], 'buy_price': [],
-                                                        'sell_order': []
-                , 'buy_order': [], 'buy_volume': [], 'sell_volume': []}
+            pid = i['quick_status']['productId']
+            dictinfo[pid] = {
+                'start_time': [9999, False],
+                'sell_price': [], 'buy_price': [],
+                'sell_order': [], 'buy_order': [],
+                'buy_volume': [], 'sell_volume': [],
+            }
         return dictinfo
 
-    def update_dict_key(self, information, file):
-        f = self.load_json_file(file)
-        for i, j in information['products'].items():  # i = name ,j = values
+    @staticmethod
+    def update_dict_key(information, file):
+        warnings.warn("update_dict_key() is a legacy JSON helper",
+                      DeprecationWarning, stacklevel=2)
+        f = file_handeler.load_json_file(file)
+        for i, j in information['products'].items():
             if i != 'time':
                 if i in f:
-                    print(f"{i} already exit")
-                    pass
+                    logger.debug("%s already exists", i)
                 else:
-                    f[i['quick_status']['productId']] = {'start_time': [int, False], 'sell_price': [], 'buy_price': [],
-                                                         'sell_order': [], 'buy_order': [], 'buy_volume': [],
-                                                         'sell_volume': []}
-        self.write_file_json(f, 'bazzar_static_file.json')
+                    f[j['quick_status']['productId']] = {
+                        'start_time': [9999, False],
+                        'sell_price': [], 'buy_price': [],
+                        'sell_order': [], 'buy_order': [],
+                        'buy_volume': [], 'sell_volume': [],
+                    }
+        file_handeler.write_file_json(f, file)
 
-    def check_if_exit(self, list_info, item):
+    @staticmethod
+    def create_start_time(file, info):
+        warnings.warn("create_start_time() is a legacy JSON helper",
+                      DeprecationWarning, stacklevel=2)
+        f = file_handeler.load_json_file(file)
+        for i in f.keys():
+            if i != 'time':
+                if not f[i]['start_time'][1]:
+                    f[i]['start_time'] = [
+                        f['time'].index(info['lastUpdated']), True
+                    ]
+        file_handeler.write_file_json(f, file)
 
-        for i in list_info.keys():  # i = name ,j = values
+    @staticmethod
+    def create_bazzar_file(information, file):
+        warnings.warn("create_bazzar_file() is a legacy JSON helper",
+                      DeprecationWarning, stacklevel=2)
+        dict_info = hypixel_api.create_dict_name(information)
+        with open(file, 'w') as f:
+            json.dump(dict_info, f)
+
+    @staticmethod
+    def check_if_exit(list_info, item):
+        warnings.warn("check_if_exit() is unused and broken",
+                      DeprecationWarning, stacklevel=2)
+        for i in list_info.keys():
             if i != 'time':
                 if item in list_info:
                     return True
                 else:
                     return False
 
-    def create_start_time(self, file, info):
-        f = self.load_json_file(file)
-        for i in f.keys():
-            if i != 'time':
-                if not f[i]['start_time'][1]:
-                    f[i]['start_time'] = [f['time'].index(info['lastUpdated']), True]
-        print(f)
-        self.write_file_json(f, file)
-
-    def create_bazzar_file(self, information, file):
-        with open(file, 'w') as f:
-            json.dump(self.create_dict_name(information), f)
-
-    def update_price(self, info, file, ):
-        f = self.load_json_file(file)
-        f['time'].append(info['lastUpdated'])
-        for i in info['products'].values():
-            f[i['quick_status']['productId']]['sell_price'].append(
-                float("{:.2f}".format(i['quick_status']['sellPrice'])))
-            f[i['quick_status']['productId']]['buy_price'].append(float("{:.2f}".format(i['quick_status']['buyPrice'])))
-            f[i['quick_status']['productId']]['sell_order'].append(
-                float("{:.2f}".format(i['quick_status']['sellOrders'])))
-            f[i['quick_status']['productId']]['buy_order'].append(
-                float("{:.2f}".format(i['quick_status']['buyOrders'])))
-            f[i['quick_status']['productId']]['buy_volume'].append(
-                float("{:.2f}".format(i['quick_status']['buyVolume'])))
-            f[i['quick_status']['productId']]['sell_volume'].append(
-                float("{:.2f}".format(i['quick_status']['sellVolume'])))
-
-        with open(file, 'w') as c:
-            json.dump(f, c)
-
-    def get_static_data(self, names):
-        info = self.load_json_file('bazzar_static_file.json')
+    @staticmethod
+    def get_static_data(names):
+        warnings.warn("get_static_data() is a legacy JSON helper; use BazaarDB",
+                      DeprecationWarning, stacklevel=2)
+        info = file_handeler.load_json_file('bazzar_static_file.json')
         return info[names]
