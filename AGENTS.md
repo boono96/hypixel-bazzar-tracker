@@ -2,13 +2,13 @@
 
 ## Project summary
 
-Hypixel SkyBlock Bazaar price tracker. Polls `https://api.hypixel.net/skyblock/bazaar` every 30s, stores time-series data in a single JSON file, and provides a Tkinter+matplotlib GUI for graphing price/volume/order trends.
+Hypixel SkyBlock Bazaar price tracker. Polls `https://api.hypixel.net/skyblock/bazaar` every 30s, stores time-series data in a single JSON file, and provides a PySide6+matplotlib dashboard GUI for graphing price/volume/order trends with sortable table, search, and embedded charts.
 
 ## Commands
 
 ```
 python hypixel_api.py    # background data collector (infinite loop)
-python main.py           # Tkinter GUI graph viewer
+python main.py           # PySide6 dashboard GUI
 python update_bazzar_file.py  # one-shot manual update (BROKEN, see below)
 ```
 
@@ -19,7 +19,7 @@ Run inside the `venv/` (Python 3.9). Activate with `venv\Scripts\activate`.
 **No dependency file exists.** You must manually install into the venv:
 
 ```
-pip install requests matplotlib numpy
+pip install requests matplotlib numpy PySide6
 ```
 
 `pandas` is present in the venv but no project file uses it.
