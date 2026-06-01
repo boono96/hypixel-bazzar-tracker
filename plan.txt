@@ -1,0 +1,38 @@
+1: making better file time save
+    solution 1:
+        step 1:
+            use the save sys that plus the previous like this :
+                [162354584765,85,69,32,35,36]
+                    162354584765 + 85
+                    162354584765 + 69
+            and every 500 save new full epoc time
+        step 2:
+            we need way to tell the program that this index is time to use or this index is the number to plus
+                let put r to the real time number
+                   [r162354584765,85,69,32,35,36]
+                problem : we need to save the tim list so if it contains r it going to be -> str, but we want -> int
+                    solution : run for loop that decode the time list
+
+    solution 2:
+        idea:
+            since we get the information every 30 sec we can just plus constant number to the first time and reset the time every 500 or sum
+                ( 1648557395728[index 0] - 1648557365724[index 1]) =  30004
+            the problem that could happen with this is that the time are gonna be different so the time will not be correct
+
+    solution 3: ---> use this one!
+        idea :
+            save one list of epoctime since the start of the date collection
+            problem :
+                the item that get insert after will be unscy with the time
+                solution :
+                    store the start index of time to each item
+                    step 1: when use the (create_bazzar_file()) function we read json from ('bazzar_static_file.json') we can use the [lastUpdate] time information to set the start index of item time
+                        problem : it override the old information
+                            solution make new function to chekc if the key already exit
+                                if yes:
+                                    ignore
+                                else(no):
+                                    append new key and dict
+
+
+
