@@ -70,23 +70,27 @@ The `BAZAAR_COOKIE` item is hardcoded to be excluded from the GUI (see `main.py`
 - **`bazzar_db.py`** — SQLite database layer (`BazaarDB` class): schema, `insert_snapshot()`, `get_latest_for_all()`, `get_history()`, `migrate_from_json()`
 - **`hypixel_api_class.py`** — API client with retry (urllib3 `Retry`), 15s timeout, response validation. Default mode uses `BazaarDB`; pass `db_path=None` to use legacy JSON methods.
 - **`hypixel_api.py`** — Collection daemon: polls every 30s, exponential backoff on errors, proper KeyboardInterrupt handling, structured logging.
-- **`main.py`** — PySide6 dashboard: queries SQLite for table + charts, dark Catppuccin theme, sortable product table with profit margin coloring, 4 chart tabs.
+- **`main.py`** — PySide6 dashboard: queries SQLite for table + charts, dark Catppuccin theme, sortable product table with profit margin coloring, 5 chart tabs including price+SMA overlay, time-window selector (1h–All).
 - **`file_handeler.py`** — Legacy JSON read/write utilities (used only for backward compat and migration).
 - **`update_bazzar_file.py`** — One-shot JSON sync script (broken due to constructor args mismatch).
 
 ## Testing
 
-Test suite (`test_hypixel_api.py`): 34 tests across:
+Test suite (`test_hypixel_api.py`): 43 tests across:
 
 | Suite | Count | Coverage |
 |-------|-------|----------|
 | `TestFileHandeler` | 5 | JSON load/write round-trips, edge cases |
-| `TestBazaarDB` | 8 | SQLite CRUD, history queries, JSON migration |
+| `TestBazaarDB` | 15 | SQLite CRUD, history queries, JSON migration, price changes, SMA, market summary |
 | `TestHypixelApiDB` | 4 | DB-mode `save_snapshot`, fetch validation, error handling |
 | `TestHypixelApiLegacy` | 11 | Legacy JSON methods (backward compat) |
-| `TestHypixelApiLive` | 6 | Real API smoke tests (requires internet) |
+| `TestHypixelApiLive` | 8 | Real API smoke tests (requires internet) |
 
 Run: `pytest -m "not live"` (unit, no network) or `pytest -m "live"` (requires internet).
+
+## Git workflow
+
+**Commit and push every change.** After completing a task, stage all relevant files, write a concise commit message describing the *why* not just the *what*, commit, and push to the remote.
 
 ## No linting, formatter, or CI
 
