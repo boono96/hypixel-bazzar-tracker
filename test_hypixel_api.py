@@ -362,7 +362,7 @@ class TestHypixelApiDB:
             mock_sess.return_value.get.return_value.json.return_value = mock_api
             mock_sess.return_value.get.return_value.raise_for_status = Mock()
 
-            data = hypixel_api.fetch()
+            data = api_db.fetch()
             count = api_db.save_snapshot(data)
             assert count == 2
 
@@ -384,7 +384,7 @@ class TestHypixelApiDB:
             mock_resp.raise_for_status.side_effect = req.HTTPError("500 Server Error")
             mock_sess.return_value.get.return_value = mock_resp
             with pytest.raises(req.HTTPError):
-                hypixel_api.fetch()
+                hypixel_api(db_path=None).fetch()
 
     def test_fetch_invalid_json_raises(self):
         with patch("hypixel_api_class._get_session") as mock_sess:
@@ -393,7 +393,7 @@ class TestHypixelApiDB:
             mock_resp.raise_for_status = Mock()
             mock_sess.return_value.get.return_value = mock_resp
             with pytest.raises(ValueError, match="not a JSON object"):
-                hypixel_api.fetch()
+                hypixel_api(db_path=None).fetch()
 
 
 # ── hypixel_api (legacy JSON mode) unit tests ─────────────────────────
@@ -525,22 +525,22 @@ class TestHypixelApiLegacy:
 @pytest.mark.live
 class TestHypixelApiLive:
     def test_api_reachable_and_returns_success(self):
-        data = hypixel_api.fetch()
+        data = hypixel_api(db_path=None).fetch()
         assert data.get("success") is True
 
     def test_api_has_expected_top_level_keys(self):
-        data = hypixel_api.fetch()
+        data = hypixel_api(db_path=None).fetch()
         for key in ("success", "lastUpdated", "products"):
             assert key in data
 
     def test_api_last_updated_is_recent(self):
-        data = hypixel_api.fetch()
+        data = hypixel_api(db_path=None).fetch()
         now_ms = int(time.time() * 1000)
         lag = now_ms - data["lastUpdated"]
         assert 0 <= lag < 5 * 60 * 1000
 
     def test_api_product_has_quick_status(self):
-        data = hypixel_api.fetch()
+        data = hypixel_api(db_path=None).fetch()
         products = data["products"]
         assert len(products) > 0
         first = next(iter(products.values()))
@@ -551,7 +551,7 @@ class TestHypixelApiLive:
             assert field in qs
 
     def test_create_dict_name_integration(self):
-        data = hypixel_api.fetch()
+        data = hypixel_api(db_path=None).fetch()
         built = hypixel_api.create_dict_name(data)
         assert len(built) == len(data["products"]) + 1
         for p in data["products"].values():
@@ -572,7 +572,7 @@ class TestHypixelApiLive:
                 mock_resp.raise_for_status = Mock()
                 mock_sess.return_value.get.return_value = mock_resp
 
-                fetched = hypixel_api.fetch()
+                fetched = api.fetch()
                 count = api.save_snapshot(fetched)
                 assert count == 2
 

@@ -1,6 +1,7 @@
 """Hypixel Bazaar API client with retry, validation, and DB-backed storage."""
 import json
 import logging
+import os
 import time
 import warnings
 
@@ -23,7 +24,7 @@ REQUIRED_PRODUCT_FIELDS = (
 _SESSION = None
 
 
-def _get_session():
+def _get_session(api_key=None):
     global _SESSION
     if _SESSION is None:
         _SESSION = requests.Session()
@@ -36,6 +37,11 @@ def _get_session():
         adapter = HTTPAdapter(max_retries=retry, pool_maxsize=2)
         _SESSION.mount("https://", adapter)
         _SESSION.mount("http://", adapter)
+
+    headers = {"User-Agent": "hypixel-bazaar-tracker/2.0"}
+    if api_key:
+        headers["API-Key"] = api_key
+    _SESSION.headers.update(headers)
     return _SESSION
 
 
@@ -44,29 +50,38 @@ class hypixel_api:
 
     By default, stores snapshots into a local SQLite database (``bazzar.db``).
     Pass ``db_path=None`` to use the legacy JSON-file backend instead.
+
+    *api_key* is sent as the ``API-Key`` HTTP header.  If ``None`` the
+    ``HYPIXEL_API_KEY`` environment variable is used as a fallback.
     """
 
-    def __init__(self, db_path="bazzar.db"):
+    def __init__(self, db_path="bazzar.db", api_key=None):
         self.db: BazaarDB | None = BazaarDB(db_path) if db_path else None
+        self.api_key = api_key or os.environ.get("HYPIXEL_API_KEY")
 
     # ── API fetching ──────────────────────────────────────────────────
 
-    @staticmethod
-    def fetch(url=BAZAAR_URL, timeout=15):
+    def fetch(self, url=BAZAAR_URL, timeout=15):
         """GET *url* with retry and timeout; return parsed JSON.
 
         Raises ``requests.RequestException`` on connectivity failure.
         Raises ``ValueError`` if the response payload is structurally invalid.
         """
-        session = _get_session()
+        session = _get_session(self.api_key)
         resp = session.get(url, timeout=timeout)
         resp.raise_for_status()
+
+        # Log rate-limit info if present
+        remaining = resp.headers.get("RateLimit-Remaining")
+        if remaining is not None:
+            logger.debug("RateLimit-Remaining: %s", remaining)
 
         data = resp.json()
         if not isinstance(data, dict):
             raise ValueError("API response is not a JSON object")
         if not data.get("success"):
-            logger.warning("API returned success=False")
+            cause = data.get("cause", "unknown")
+            logger.warning("API returned success=False · cause: %s", cause)
         if "products" not in data:
             raise ValueError("API response missing 'products' key")
         if "lastUpdated" not in data:
@@ -80,6 +95,16 @@ class hypixel_api:
         return data
 
     get_information = fetch  # legacy alias
+
+    # ── static convenience (no API key) ───────────────────────────────
+
+    @staticmethod
+    def fetch_public(url=BAZAAR_URL, timeout=15):
+        """Fetch without an API key — convenience for quick checks."""
+        session = _get_session(None)
+        resp = session.get(url, timeout=timeout)
+        resp.raise_for_status()
+        return resp.json()
 
     # ── DB storage ────────────────────────────────────────────────────
 
