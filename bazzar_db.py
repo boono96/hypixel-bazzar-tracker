@@ -172,6 +172,120 @@ class BazaarDB:
         ).fetchone()
         return row["ts"] or 0
 
+    # ── analytics ─────────────────────────────────────────────────────
+
+    def get_price_change(self, product_id, field="sell_price", lookback=1):
+        """Return (change_abs, change_pct) between latest and N-snapshots-ago value.
+
+        *lookback*: how many snapshots back to compare against (1 = previous snapshot).
+        Returns (0, 0) if insufficient data.
+        """
+        pk = self._product_id_to_pk(product_id)
+        rows = self._conn.execute(
+            f"SELECT s.{field} FROM snapshots s "
+            f"WHERE s.product_id = ? "
+            f"ORDER BY s.timestamp_ms DESC LIMIT ?",
+            (pk, lookback + 1),
+        ).fetchall()
+
+        if len(rows) < lookback + 1:
+            return 0, 0
+        latest = rows[0][0] or 0
+        older = rows[-1][0] or 0
+        if older == 0:
+            return 0, 0
+        change = latest - older
+        pct = (change / older) * 100
+        return round(change, 2), round(pct, 2)
+
+    def get_summary_stats(self, product_id, field="sell_price"):
+        """Return {min, max, mean, latest, count} for a given numeric field."""
+        pk = self._product_id_to_pk(product_id)
+        row = self._conn.execute(
+            f"SELECT MIN(s.{field}), MAX(s.{field}), AVG(s.{field}), COUNT(s.{field}) "
+            f"FROM snapshots s WHERE s.product_id = ?",
+            (pk,),
+        ).fetchone()
+        count = row[3] or 0
+        latest_row = self._conn.execute(
+            f"SELECT s.{field} FROM snapshots s "
+            f"WHERE s.product_id = ? ORDER BY s.timestamp_ms DESC LIMIT 1",
+            (pk,),
+        ).fetchone()
+        latest = latest_row[0] if latest_row else 0
+        return {
+            "min": round(row[0], 2) if row[0] else 0,
+            "max": round(row[1], 2) if row[1] else 0,
+            "mean": round(row[2], 2) if row[2] else 0,
+            "latest": round(latest, 2) if latest else 0,
+            "count": count,
+        }
+
+    def get_all_price_changes(self, field="sell_price", lookback=1):
+        """Return {product_id: (change_abs, change_pct)} for all products."""
+        result = {}
+        for pid in self.get_product_ids():
+            change = self.get_price_change(pid, field, lookback)
+            if change != (0, 0):
+                result[pid] = change
+        return result
+
+    # ── moving average ────────────────────────────────────────────────
+
+    def get_moving_average(self, product_id, field="sell_price", window=5):
+        """Return windowed-SMA as list of (timestamp_ms, avg_value).
+
+        Requires at least *window* snapshots; returns [] otherwise.
+        """
+        pk = self._product_id_to_pk(product_id)
+        rows = self._conn.execute(
+            f"SELECT s.timestamp_ms, s.{field} FROM snapshots s "
+            f"WHERE s.product_id = ? "
+            f"ORDER BY s.timestamp_ms",
+            (pk,),
+        ).fetchall()
+
+        if len(rows) < window:
+            return []
+
+        result = []
+        values = [r[1] or 0 for r in rows]
+        for i in range(window - 1, len(values)):
+            avg = sum(values[i - window + 1:i + 1]) / window
+            result.append((rows[i][0], round(avg, 2)))
+        return result
+
+    # ── market overview ───────────────────────────────────────────────
+
+    def get_market_summary(self):
+        """Return dict with aggregate market stats."""
+        latest = self.get_latest_for_all()
+        if not latest:
+            return {"total_products": 0, "total_sell_volume": 0,
+                    "total_buy_volume": 0, "avg_margin": 0, "top_movers": []}
+
+        total_sv = sum(d.get("sell_volume", 0) or 0 for d in latest.values())
+        total_bv = sum(d.get("buy_volume", 0) or 0 for d in latest.values())
+        margins = []
+        movers = []
+        for pid, d in latest.items():
+            bp = d.get("buy_price", 0) or 0
+            sp = d.get("sell_price", 0) or 0
+            if bp:
+                margins.append(((sp - bp) / bp) * 100)
+            change = self.get_price_change(pid, "sell_price", lookback=1)
+            if change[1] != 0:
+                movers.append((pid, change[1]))
+
+        movers.sort(key=lambda x: abs(x[1]), reverse=True)
+        return {
+            "total_products": len(latest),
+            "total_sell_volume": total_sv,
+            "total_buy_volume": total_bv,
+            "avg_margin": round(sum(margins) / len(margins), 2) if margins else 0,
+            "top_movers": movers[:5],
+        }
+
     # ── migration ─────────────────────────────────────────────────────
 
     def migrate_from_json(self, json_path):

@@ -247,6 +247,104 @@ class TestBazaarDB:
     def test_close(self, db):
         db.close()
 
+    def test_price_change_positive(self, db):
+        d1 = _mock_api_data(1000)
+        batch1 = {p["quick_status"]["productId"]: p["quick_status"] for p in d1["products"].values()}
+        db.insert_snapshot(1000, batch1)
+
+        d2 = _mock_api_data(2000)
+        d2["products"]["STONE"]["quick_status"]["sellPrice"] = 3.0
+        batch2 = {p["quick_status"]["productId"]: p["quick_status"] for p in d2["products"].values()}
+        db.insert_snapshot(2000, batch2)
+
+        abs_c, pct_c = db.get_price_change("STONE", "sell_price", lookback=1)
+        assert abs_c == 1.5
+        assert pct_c == 100.0
+
+    def test_price_change_unchanged(self, db):
+        d1 = _mock_api_data(1000)
+        batch1 = {p["quick_status"]["productId"]: p["quick_status"] for p in d1["products"].values()}
+        db.insert_snapshot(1000, batch1)
+        db.insert_snapshot(2000, batch1)
+        abs_c, pct_c = db.get_price_change("OAK_LOG", "sell_price", lookback=1)
+        assert abs_c == 0
+        assert pct_c == 0
+
+    def test_price_change_insufficient_data(self, db):
+        d = _mock_api_data(1000)
+        batch = {p["quick_status"]["productId"]: p["quick_status"] for p in d["products"].values()}
+        db.insert_snapshot(1000, batch)
+        abs_c, pct_c = db.get_price_change("STONE", lookback=1)
+        assert abs_c == 0
+        assert pct_c == 0
+
+    def test_summary_stats(self, db):
+        d1 = _mock_api_data(1000)
+        d1["products"]["STONE"]["quick_status"]["sellPrice"] = 1.0
+        batch1 = {p["quick_status"]["productId"]: p["quick_status"] for p in d1["products"].values()}
+        db.insert_snapshot(1000, batch1)
+
+        d2 = _mock_api_data(2000)
+        d2["products"]["STONE"]["quick_status"]["sellPrice"] = 3.0
+        batch2 = {p["quick_status"]["productId"]: p["quick_status"] for p in d2["products"].values()}
+        db.insert_snapshot(2000, batch2)
+
+        stats = db.get_summary_stats("STONE", "sell_price")
+        assert stats["min"] == 1.0
+        assert stats["max"] == 3.0
+        assert stats["mean"] == 2.0
+        assert stats["latest"] == 3.0
+        assert stats["count"] == 2
+
+    def test_get_all_price_changes(self, db):
+        d1 = _mock_api_data(1000)
+        batch1 = {p["quick_status"]["productId"]: p["quick_status"] for p in d1["products"].values()}
+        db.insert_snapshot(1000, batch1)
+
+        d2 = _mock_api_data(2000)
+        d2["products"]["STONE"]["quick_status"]["sellPrice"] = 2.5
+        d2["products"]["OAK_LOG"]["quick_status"]["sellPrice"] = 10.0
+        batch2 = {p["quick_status"]["productId"]: p["quick_status"] for p in d2["products"].values()}
+        db.insert_snapshot(2000, batch2)
+
+        changes = db.get_all_price_changes("sell_price", lookback=1)
+        assert changes["STONE"][1] > 0
+        assert "OAK_LOG" in changes
+        assert changes["OAK_LOG"][1] > 0
+
+    def test_moving_average(self, db):
+        for i in range(1, 7):
+            d = _mock_api_data(i * 1000)
+            d["products"]["STONE"]["quick_status"]["sellPrice"] = float(i * 10)
+            db.insert_snapshot(i * 1000, {
+                "STONE": d["products"]["STONE"]["quick_status"],
+            })
+
+        sma = db.get_moving_average("STONE", "sell_price", window=3)
+        assert len(sma) == 4
+        assert sma[0][0] == 3000
+        assert sma[0][1] == 20.0  # (10+20+30)/3
+        assert sma[1][1] == 30.0  # (20+30+40)/3
+
+    def test_moving_average_insufficient(self, db):
+        d = _mock_api_data(1000)
+        db.insert_snapshot(1000, {
+            "STONE": d["products"]["STONE"]["quick_status"],
+        })
+        assert db.get_moving_average("STONE", "sell_price", window=5) == []
+
+    def test_market_summary_empty(self, db):
+        ms = db.get_market_summary()
+        assert ms["total_products"] == 0
+
+    def test_market_summary(self, db):
+        d1 = _mock_api_data(1000)
+        batch1 = {p["quick_status"]["productId"]: p["quick_status"] for p in d1["products"].values()}
+        db.insert_snapshot(1000, batch1)
+        ms = db.get_market_summary()
+        assert ms["total_products"] == 2
+        assert ms["total_sell_volume"] > 0
+
 
 # ── hypixel_api (DB mode) unit tests ─────────────────────────────────
 
