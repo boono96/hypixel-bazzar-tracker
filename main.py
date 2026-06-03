@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QSplitter, QTableWidget, QTableWidgetItem,
     QTabWidget, QVBoxLayout, QHBoxLayout, QWidget, QLineEdit, QStatusBar,
     QHeaderView, QLabel, QPushButton, QSizePolicy, QFrame, QGroupBox,
-    QGridLayout, QAbstractItemView,
+    QGridLayout, QAbstractItemView, QComboBox,
 )
 
 from bazzar_db import BazaarDB
@@ -101,6 +101,27 @@ QPushButton:hover {
 }
 QPushButton:pressed {
     background-color: #313244;
+}
+QComboBox {
+    background-color: #45475a;
+    color: #cdd6f4;
+    border: 1px solid #585b70;
+    border-radius: 6px;
+    padding: 5px 10px;
+    font-size: 12px;
+}
+QComboBox:hover {
+    background-color: #585b70;
+}
+QComboBox::drop-down {
+    border: none;
+    padding-right: 6px;
+}
+QComboBox QAbstractItemView {
+    background-color: #1e1e2e;
+    color: #cdd6f4;
+    selection-background-color: #45475a;
+    border: 1px solid #585b70;
 }
 QStatusBar {
     background-color: #11111b;
@@ -195,6 +216,13 @@ class BazaarDashboard(QMainWindow):
         refresh_btn.setToolTip("Refresh from database (Ctrl+R)")
         refresh_btn.clicked.connect(self._reload)
         top_bar.addWidget(refresh_btn)
+
+        self._time_combo = QComboBox()
+        self._time_combo.addItems(["1h", "6h", "24h", "7d", "All"])
+        self._time_combo.setCurrentIndex(2)  # 24h default
+        self._time_combo.setToolTip("Chart time window")
+        self._time_combo.currentIndexChanged.connect(self._draw_chart)
+        top_bar.addWidget(self._time_combo)
 
         self._info_label = QLabel("")
         self._info_label.setStyleSheet("color: #a6adc8; padding-right: 8px;")
@@ -466,6 +494,26 @@ class BazaarDashboard(QMainWindow):
 
     # ── Charts ────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _insert_gap_breaks(data, max_gap_minutes=10):
+        """Insert NaN gaps into all arrays in *data* where time delta exceeds
+        *max_gap_minutes*.  Returns a new dict with same keys and aligned NaN breaks."""
+        max_gap_ms = max_gap_minutes * 60_000
+        times = data["time"]
+        result = {k: [] for k in data}
+        for i, t in enumerate(times):
+            if i > 0 and (t - times[i - 1]) > max_gap_ms:
+                for k in result:
+                    if k == "time":
+                        result[k].append(times[i - 1] + 1)
+                    else:
+                        result[k].append(np.nan)
+            result["time"].append(t)
+            for k in data:
+                if k != "time":
+                    result[k].append(data[k][i])
+        return result
+
     def _draw_chart(self):
         name = self._current_product
         if not name:
@@ -476,6 +524,19 @@ class BazaarDashboard(QMainWindow):
         ))
         if not data["time"]:
             return
+
+        # Trim to selected time window
+        window_label = self._time_combo.currentText()
+        if window_label != "All":
+            window_ms = {"1h": 3600_000, "6h": 21600_000, "24h": 86400_000,
+                         "7d": 604800_000}[window_label]
+            cutoff = data["time"][-1] - window_ms
+            indices = [i for i, t in enumerate(data["time"]) if t >= cutoff]
+            if indices:
+                for k in data:
+                    data[k] = [data[k][i] for i in indices]
+
+        data = self._insert_gap_breaks(data)
         x = np.array(data["time"]).astype("datetime64[ms]")
 
         idx = self.tabs.currentIndex()
